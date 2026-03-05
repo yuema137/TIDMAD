@@ -9,8 +9,8 @@ import os
 import json
 
 # Import your sandboxed components for Agent Mode
-from models_sandbox import PositionalUNet, AE
-from models_format_sandbox import PUNetConfig, AEConfig, LossConfig
+from models_sandbox import MODEL_REGISTRY, PositionalUNet, AE
+from models_format_sandbox import PUNetConfig, AEConfig, LossConfig, get_config_class
 from array2h5 import create_abra_file
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -77,14 +77,22 @@ def main():
 
     # 2. Model Loading Logic
     if args.mode == 'fix':
-        model_map = {"punet": "PUNet_0_20.pth", "fcnet": "FCNet_0_20.pth"}
+        # Baseline / Fixed mode logic remains largely the same
+        model_map = {
+            "punet": "PUNet_0_20.pth", 
+            "fcnet": "FCNet_0_20.pth",
+            "transformer": "Transformer_0_20.pth"
+        }
         model_file = model_map.get(args.denoising_model)
+        if not model_file or not os.path.exists(model_file):
+            raise FileNotFoundError(f"Baseline model file {model_file} not found.")
+            
         model = torch.load(model_file, map_location=DEVICE, weights_only=False)
-        input_size = 40000 
+        input_size = 40000 # Default baseline size
         current_loss_type = "ce"
     
     else:
-        # AGENT MODE
+        # AGENT MODE: Dynamic loading using Registry and Factory
         if not args.model_cfg or not args.model_path:
             raise ValueError("Agent mode requires --model_cfg and --model_path")
         
@@ -94,17 +102,27 @@ def main():
             l_data = json.load(f)
         current_loss_type = l_data.get("loss_type", "ce")
 
-        # Initialize Architecture
+        # Load Model Config
         with open(args.model_cfg, 'r') as f:
             m_data = json.load(f)
 
-        if args.denoising_model == "punet":
-            m_cfg = PUNetConfig(**m_data)
-            model = PositionalUNet(m_cfg, loss_type=current_loss_type).to(DEVICE) 
+        # --- MINIMAL CHANGE: Dynamic Initialization ---
+        config_class = get_config_class(args.denoising_model)
+        model_class = MODEL_REGISTRY.get(args.denoising_model)
+        
+        if config_class is None or model_class is None:
+            raise ValueError(f"Model type '{args.denoising_model}' is not supported in MODEL_REGISTRY")
+
+        # Instantiate Pydantic config and then the Model
+        m_cfg = config_class(**m_data)
+        
+        # Special handling for AE (loss_type injection), others use standard config init
+        if args.denoising_model == "fcnet":
+            model = model_class(m_cfg, loss_type=current_loss_type).to(DEVICE)
         else:
-            m_cfg = AEConfig(**m_data)
-            model = AE(m_cfg, loss_type=current_loss_type).to(DEVICE)
+            model = model_class(m_cfg).to(DEVICE)
             
+        # Load weights from the agent's specific experiment run
         model.load_state_dict(torch.load(args.model_path, map_location=DEVICE))
         input_size = m_cfg.segmentation_size
 
@@ -121,6 +139,7 @@ def main():
         alltrain = np.array(ABRAfile['timeseries']['channel0001']['timeseries'])
         alltarget = np.array(ABRAfile['timeseries']['channel0002']['timeseries'])
         
+        # Reshape according to input_size from config
         train_loader = alltrain.reshape(-1, 1, input_size)
         target_loader = alltarget.reshape(-1, 1, input_size)
         
@@ -140,12 +159,12 @@ def main():
     else:
         out_name = os.path.join(args.data_dir, f"abra_validation_denoised_{args.denoising_model}_{args.run_name}_{args.exp_id}_{idx_str}.h5")
 
-    # Remove old files
+    # Clean up old files before writing new one
     if os.path.exists(out_name):
         os.remove(out_name)
     
     create_abra_file(out_name, denoised.flatten().astype(np.int8), injected.flatten().astype(np.int8), indexed=False)
     print(f"Inference complete. Saved to: {out_name}")
-
+    
 if __name__ == "__main__":
     main()
