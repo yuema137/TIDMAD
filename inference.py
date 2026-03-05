@@ -52,7 +52,7 @@ DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 parser = argparse.ArgumentParser(description="Run time series denoising algorithm over the full validation dataset to produce denoised SQUID time series.")
 
 # Output directory with default as current directory
-parser.add_argument('--data_dir', '-d', type=str, default=os.path.join(os.getcwd(),"Data"), help='Directory where the training file is stored (default: current working directory).')
+parser.add_argument('--data_dir', '-d', type=str, default="/home/klz/Data/TIDMAD/", help='Directory where the training file is stored (default: current working directory).')
 parser.add_argument('--denoising_model', '-m', type=str, default='punet', help='Denoising model we would like to train [mavg/savgol/fcnet/punet/transformer] (Default: punet).')
 parser.add_argument('--window_size', '-ws', type=int, default= 100)
 parser.add_argument('--savgol_order', '-so', type=int, default=11)
@@ -87,8 +87,8 @@ def normalize(time_series):
     return time_series.mean(), time_series.std()
 
 def read_loader(ABRAfile):
-	alltrain = np.array(ABRAfile['timeseries']['channel0001']['timeseries'])+128
-	alltarget = np.array(ABRAfile['timeseries']['channel0002']['timeseries'])+128
+	alltrain = np.array(ABRAfile['timeseries']['channel0001']['timeseries'])
+	alltarget = np.array(ABRAfile['timeseries']['channel0002']['timeseries'])
 
 	max_index = 2000000000
 	alltrain = alltrain[:max_index].reshape( -1, batchsize, input_size)
