@@ -4,7 +4,7 @@ import json
 import subprocess
 import datetime
 from typing import Dict, Any, Optional
-from models_format_sandbox import get_config_class, TrainConfig, LossConfig
+from models_format_sandbox import get_config_class, TrainConfig, LossConfig, ExperimentConfig
 
 # --- Storage Strategies ---
 
@@ -74,13 +74,13 @@ class TidmadSandbox:
         # Set up sandbox directory structure - hard coded for now
         self.base_dir = "/home/klz/Data/TIDMAD_Sandbox"
         self.dirs = {
-            "configs": os.path.join(self.base_dir, "configs"),
+            "configs": os.path.join(self.base_dir, "configs", run_name),
             "models": os.path.join(self.base_dir, "cached_models"),
             "records": os.path.join(self.base_dir, "records"),
             "data": "/home/klz/Data/TIDMAD/" 
         }
         for d in self.dirs.values():
-            if not d.startswith("/home/klz/Data"): os.makedirs(d, exist_ok=True)
+            os.makedirs(d, exist_ok=True)
 
         self.run_name = run_name
         # Initialize Recorder based on strategy
@@ -101,26 +101,40 @@ class TidmadSandbox:
         """Retrieves experiment history for the Agent's planning phase."""
         return self.recorder.get_summary()
 
-    def _validate_configs(self, model_type: str, m_cfg: Dict, t_cfg: Dict, l_cfg: Dict):
-        """Internal helper to validate dicts against Pydantic models."""
+    def _validate_configs(self, model_type: str, m_cfg: Dict, t_cfg: Dict, l_cfg: Dict, exp_id: str, run_name: str):
+        """Internal helper to validate dicts using the Global ExperimentConfig."""
         try:
-            m_cls = get_config_class(model_type)
-            validated_m = m_cls(**m_cfg)
-            validated_t = TrainConfig(**t_cfg)
-            validated_l = LossConfig(**l_cfg)
-            return validated_m.model_dump(), validated_t.model_dump(), validated_l.model_dump()
+            # Consolidate all dicts into one global check
+            full_payload = {
+                "exp_id": exp_id,
+                "run_name": run_name,
+                "model_type": model_type,
+                "network_config": m_cfg,
+                "train_config": t_cfg,
+                "loss_config": l_cfg
+            }
+            
+            # This single line performs all individual AND cross-object validations
+            exp_config = ExperimentConfig(**full_payload)
+            
+            return (
+                exp_config.network_config.model_dump(),
+                exp_config.train_config.model_dump(),
+                exp_config.loss_config.model_dump()
+            )
         except Exception as e:
-            raise ValueError(f"Configuration Validation Failed: {str(e)}")
+            # The agent receives this specific error message and can correct its plan
+            raise ValueError(f"Experiment Configuration Rejected: {str(e)}")
 
     def execute_training(self, exp_id: str, run_name: str, model_type: str, m_cfg: Dict, t_cfg: Dict, l_cfg: Dict):
         """Executes the training physical script."""
         try:
-            vm, vt, vl = self._validate_configs(model_type, m_cfg, t_cfg, l_cfg)
+            vm, vt, vl = self._validate_configs(model_type, m_cfg, t_cfg, l_cfg, exp_id, run_name)
             
             paths = {
-                "m": os.path.abspath(os.path.join(self.dirs["configs"], f"test_model_{exp_id}.json")),
-                "t": os.path.abspath(os.path.join(self.dirs["configs"], f"test_train_{exp_id}.json")),
-                "l": os.path.abspath(os.path.join(self.dirs["configs"], f"test_loss_{exp_id}.json"))
+                "m": os.path.abspath(os.path.join(self.dirs["configs"], f"model_config_{exp_id}.json")),
+                "t": os.path.abspath(os.path.join(self.dirs["configs"], f"train_config_{exp_id}.json")),
+                "l": os.path.abspath(os.path.join(self.dirs["configs"], f"loss_config_{exp_id}.json"))
             }
             for k, v in zip(["m", "t", "l"], [vm, vt, vl]):
                 with open(paths[k], 'w') as f: json.dump(v, f)
@@ -147,6 +161,7 @@ class TidmadSandbox:
             print(f"--- Train Script Error ---\n{error_msg}")
             return {"status": "error", "message": error_msg}
         except Exception as e:
+            print(f"!!! [Executor Internal Error] !!!: {str(e)}") 
             return {"status": "error", "message": str(e)}
 
     def execute_inference(self, exp_id: str, run_name: str, model_type: str, m_cfg: Dict, l_cfg: Dict):

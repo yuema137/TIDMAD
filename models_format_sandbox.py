@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Literal, Optional, Union, Type
 
 # ==========================================
-# 1. Base Configuration
+# 1. Base Model Configuration
 # ==========================================
 
 class BaseConfig(BaseModel):
@@ -78,7 +78,37 @@ class AEConfig(BaseConfig):
         return v
     
 # ==========================================
-# 4. Global Model Registry
+# 4. Transformer Configuration
+# ==========================================
+class TransformerConfig(BaseConfig):
+    model_type: Literal["transformer"] = "transformer"
+    # Note: Baseline used 20000 to avoid OOM
+    segmentation_size: int = Field(default=20000, ge=1000, le=40000)
+    embedding_dim: int = Field(default=32, ge=8, le=256)
+    nhead: int = Field(default=4, ge=1, le=16)
+    num_layers: int = Field(default=2, ge=1, le=10)
+    dim_feedforward: int = Field(default=128, ge=64, le=1024)
+    dropout: float = Field(default=0.1, ge=0.0, le=0.5)
+    pe_factor: float = Field(default=1.0, ge=0.0, le=10.0)
+
+    @model_validator(mode='after')
+    def check_memory_risk(self) -> 'TransformerConfig':
+        if self.segmentation_size > 25000:
+            # We could raise a warning here if we had a logger, 
+            # for now, we just keep it as a known risk.
+            pass
+        return self
+
+    @field_validator('embedding_dim')
+    @classmethod
+    def check_nhead_divisibility(cls, v: int, info) -> int:
+        nhead = info.data.get('nhead')
+        if nhead and v % nhead != 0:
+            raise ValueError(f"embedding_dim {v} must be divisible by nhead {nhead}")
+        return v
+    
+# ==========================================
+# Global Model Registry
 # ==========================================
 
 # Union type for the Agent to choose from
@@ -88,12 +118,13 @@ def get_config_class(model_type: str) -> Optional[Type[BaseConfig]]:
     """Helper for the Orchestrator to map strings to Pydantic classes."""
     mapping = {
         "punet": PUNetConfig,
-        "fcnet": AEConfig
+        "fcnet": AEConfig,
+        "transformer": TransformerConfig,
     }
     return mapping.get(model_type)
 
 # ==========================================
-# 5. Loss Configs
+# Loss Configs
 # ==========================================
 
 class LossConfig(BaseModel):
@@ -112,6 +143,14 @@ class LossConfig(BaseModel):
     
     reduction: Literal["mean", "sum"] = "mean"
     use_class_weights: bool = Field(default=False)
+    
+    def check_compatibility(self, model_type: str):
+        """Called by Executor to prevent illegal combinations."""
+        if self.loss_type == "smooth_l1" and model_type != "fcnet":
+            raise ValueError(
+                f"Incompatible Pair: 'smooth_l1' is for waveform regression (AE/fcnet). "
+                f"Model '{model_type}' is a classifier and requires 'ce' or 'focal' ."
+            )
 
     @model_validator(mode='after')
     def enforce_parameter_consistency(self) -> 'LossConfig':
@@ -139,7 +178,7 @@ class LossConfig(BaseModel):
         return self
     
 # ==========================================
-# 6. Training Config
+# Training Config
 # ==========================================
 
 class TrainConfig(BaseModel):
@@ -155,3 +194,42 @@ class TrainConfig(BaseModel):
     optimizer_type: Literal["adam", "adamw", "sgd"] = "adamw"
     weight_decay: float = Field(default=1e-5, ge=0, le=1e-1)
     device: str = "cuda" # or "cpu"
+
+# ==========================================
+# Integrated Config
+# ==========================================
+class ExperimentConfig(BaseModel):
+    """
+    Top-level validation class that captures the entire experiment intent.
+    This is where cross-config compatibility is enforced.
+    """
+    exp_id: str
+    run_name: str
+    model_type: Literal["punet", "fcnet", "transformer"]
+    network_config: ModelConfigUnion # This uses the Union defined earlier
+    train_config: TrainConfig
+    loss_config: LossConfig
+
+    @model_validator(mode='after')
+    def validate_architecture_loss_match(self) -> 'ExperimentConfig':
+        """
+        Enforce the physical constraint: 
+        Regression (SmoothL1) is only for AutoEncoders (fcnet).
+        Classification (CE/Focal) is for segmentors (punet/transformer).
+        """
+        m_type = self.model_type
+        l_type = self.loss_config.loss_type
+
+        if l_type == "smooth_l1" and m_type != "fcnet":
+            raise ValueError(
+                f"Incompatible Pair: 'smooth_l1' is for waveform regression (fcnet). "
+                f"Model '{m_type}' is a classifier (256 classes) and requires 'ce' or 'focal' loss."
+            )
+        
+        if m_type == "fcnet" and l_type in ["ce", "focal", "focal_cw"]:
+            # Note: Your AE implementation supports classification, 
+            # but usually, agents might misuse this. 
+            # We can allow it or warn here.
+            pass
+            
+        return self

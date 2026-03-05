@@ -10,12 +10,12 @@ from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 
 # Import your sandboxed components
-from models_sandbox import PositionalUNet, AE
-from models_format_sandbox import PUNetConfig, AEConfig, TrainConfig, LossConfig
+from models_sandbox import MODEL_REGISTRY, PositionalUNet, AE, TransformerModel
+from models_format_sandbox import PUNetConfig, AEConfig, TrainConfig, LossConfig, get_config_class
 from loss_models_sandbox import get_criterion
 
 # ==========================================
-# 1. Dataset Logic (Unchanged as per your request)
+# 1. Dataset Logic
 # ==========================================
 
 class TIDMADDataset(Dataset):
@@ -71,12 +71,15 @@ def run_experiment(model_cfg, train_cfg: TrainConfig, loss_cfg: LossConfig, data
     device = torch.device(train_cfg.device if torch.cuda.is_available() else "cpu")
     
     # Model Initialization
-    if isinstance(model_cfg, PUNetConfig):
-        model = PositionalUNet(model_cfg).to(device)
-    elif isinstance(model_cfg, AEConfig):
-        model = AE(model_cfg, loss_type=loss_cfg.loss_type).to(device)
+    model_class = MODEL_REGISTRY.get(model_cfg.model_type)
+    if model_class is None:
+        raise ValueError(f"Model type {model_cfg.model_type} not found in MODEL_REGISTRY")
+    
+    # Pass loss_type only for AE (as per your current AE implementation)
+    if model_cfg.model_type == "fcnet":
+        model = model_class(model_cfg, loss_type=loss_cfg.loss_type).to(device)
     else:
-        raise ValueError("Invalid model configuration type provided.")
+        model = model_class(model_cfg).to(device)
 
     # Criterion Setup
     class_weights = data_loader.dataset.get_class_weight().to(device) if loss_cfg.use_class_weights else None
@@ -170,7 +173,11 @@ def main():
     with open(args.loss_cfg, 'r') as f: l_data = json.load(f)
 
     # Initialize Pydantic Configs
-    model_cfg = PUNetConfig(**m_data) if m_data.get("model_type") == "punet" else AEConfig(**m_data)
+    config_class = get_config_class(m_data.get("model_type"))
+    if config_class is None:
+        raise ValueError(f"Unknown model_type in config: {m_data.get('model_type')}")
+    
+    model_cfg = config_class(**m_data)
     train_cfg = TrainConfig(**t_data)
     loss_cfg = LossConfig(**l_data)
 
@@ -180,8 +187,15 @@ def main():
     results = run_experiment(model_cfg, train_cfg, loss_cfg, loader, sandbox_dirs, args.exp_id)
     
     # Save final JSON
-    res_path = os.path.join(sandbox_dirs['results'], f"experiment_results_{model_cfg.model_type}_{args.run_name}_{args.exp_id}.json")
-    with open(res_path, "w") as f: json.dump(results, f, indent=4)
+    final_res_dir = os.path.join(sandbox_dirs['results'], args.run_name)
+    os.makedirs(final_res_dir, exist_ok=True)
+    
+    # use folder to separate runs
+    res_filename = f"experiment_results_{model_cfg.model_type}_{args.exp_id}.json"
+    res_path = os.path.join(final_res_dir, res_filename)
+    
+    with open(res_path, "w") as f: 
+        json.dump(results, f, indent=4)
     print(f"Results saved to: {res_path}")
 
 if __name__ == "__main__":

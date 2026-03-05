@@ -8,7 +8,7 @@ from torch.utils.data import dataset
 import math
 from pydantic import BaseModel, Field, field_validator, model_validator 
 from typing import List, Literal, Union
-from models_format_sandbox import PUNetConfig, AEConfig
+from models_format_sandbox import PUNetConfig, AEConfig, TransformerConfig
 
 # Blocks used by networks
 
@@ -302,3 +302,61 @@ class AE(nn.Module):
             return reconstructed
         
         return self.outc(reconstructed.unsqueeze(1))
+    
+class TransformerModel(nn.Module):
+    """
+    Refactored Transformer based on baseline training script.
+    Maintains the same logic but supports dynamic configuration.
+    """
+    def __init__(self, config: TransformerConfig):
+        super().__init__()
+        self.emb_dim = config.embedding_dim
+        
+        # Use 256 for ADC classes
+        self.embedding = nn.Embedding(256, self.emb_dim, scale_grad_by_freq=True)
+        
+        # Positional encoding: note that your PositionalEncoding class 
+        # expects [Batch, Channel, Time]
+        self.pos_encoder = PositionalEncoding(
+            self.emb_dim, 
+            max_len=config.segmentation_size, 
+            factor=config.pe_factor,
+            dropout=config.dropout
+        )
+        
+        encoder_layers = nn.TransformerEncoderLayer(
+            d_model=self.emb_dim, 
+            nhead=config.nhead, 
+            dim_feedforward=config.dim_feedforward, 
+            dropout=config.dropout,
+            batch_first=True 
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=config.num_layers)
+        
+        # Final projection to 256 ADC channels
+        self.linear = nn.Linear(self.emb_dim, 256)
+
+    def forward(self, x):
+        # x: [Batch, Time] -> Long for Embedding
+        x = self.embedding(x.long()) * math.sqrt(self.emb_dim) # [Batch, Time, Emb]
+        
+        # Adapt to your PositionalEncoding [Batch, Channel, Time]
+        x = x.transpose(1, 2) 
+        x = self.pos_encoder(x)
+        x = x.transpose(1, 2) # Back to [Batch, Time, Emb]
+        
+        # Transformer Processing
+        output = self.transformer_encoder(x) # [Batch, Time, Emb]
+        
+        # Output Projection: [Batch, Time, 256]
+        output = self.linear(output) 
+        
+        # Transpose to [Batch, 256, Time] to match Loss requirements
+        return output.transpose(1, 2)
+    
+# 2. Global Registry
+MODEL_REGISTRY = {
+    "punet": PositionalUNet,
+    "fcnet": AE,
+    "transformer": TransformerModel,
+}
