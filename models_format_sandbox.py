@@ -112,7 +112,7 @@ class TransformerConfig(BaseConfig):
 # ==========================================
 
 # Union type for the Agent to choose from
-ModelConfigUnion = Union[PUNetConfig, AEConfig]
+ModelConfigUnion = Union[PUNetConfig, AEConfig, TransformerConfig]
 
 def get_config_class(model_type: str) -> Optional[Type[BaseConfig]]:
     """Helper for the Orchestrator to map strings to Pydantic classes."""

@@ -7,6 +7,7 @@ import importlib
 import traceback
 from core.sandbox_executor import TidmadSandbox
 from agent.llm_bridge import LLMBridge
+from models_sandbox import MODEL_REGISTRY
 
 def run_skill(skill_folder, sandbox, **params):
     """
@@ -35,7 +36,10 @@ def main():
                         help="Initial advice from a human expert to guide exploration.")
     parser.add_argument("--max_rounds", type=int, default=10, 
                         help="Maximum number of experiment rounds to prevent token drain.")
-    parser.add_argument("--force_model", type=str, choices=["punet", "fcnet", "auto"], default="auto",
+    
+    model_choices = list(MODEL_REGISTRY.keys()) + ["auto"]
+    
+    parser.add_argument("--force_model", type=str, choices=model_choices, default="auto",
                         help="Force a specific architecture or let the agent decide (auto).")
     
     # Project Name

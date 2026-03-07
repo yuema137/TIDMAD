@@ -166,8 +166,8 @@ class TidmadSandbox:
 
     def execute_inference(self, exp_id: str, run_name: str, model_type: str, m_cfg: Dict, l_cfg: Dict):
         """Executes the inference physical script."""
-        m_path = os.path.abspath(os.path.join(self.dirs["configs"], f"test_model_{exp_id}.json"))
-        l_path = os.path.abspath(os.path.join(self.dirs["configs"], f"test_loss_{exp_id}.json"))
+        m_path = os.path.abspath(os.path.join(self.dirs["configs"], f"model_config_{exp_id}.json"))
+        l_path = os.path.abspath(os.path.join(self.dirs["configs"], f"loss_config_{exp_id}.json"))
         model_path = os.path.abspath(os.path.join(self.dirs["models"], f"model_{model_type}_{exp_id}_agent.pth"))
         
         try:
